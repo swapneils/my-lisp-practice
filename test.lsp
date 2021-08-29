@@ -54,6 +54,54 @@
 				      (return nil)))))
       (not stack))))
 
+;;An incomplete representation of "rec" from Paul Graham's Arc dialect of LISP, based purely on a passing mention of the function/macro/however-he-implemented-it in http://www.paulgraham.com/power.html
+;;NOTE: I still have to look at the actual implementation to see if there are any other useful functions I'm missing
+;;NOTE: How to make this actually return the function, instead of just applying it to the "start" input arg? If it could do that it would be really amazing, since e.g. you could use it to make input arguments for other functions. But it seems pretty hard to do with lambdas; I haven't figured out how to insert code that preserves the recursivity without just making this into a block a-la-progn or somehow making it a function; which probably just means recursing the whole thing, inelegant as that is.
+
+(defmacro rec (iterator ending combinator &optional (end nil end-supplied-p))
+  (let* ((recfuncname (gensym))
+	 (iterateval (gensym)))
+    `(labels ((,recfuncname (,iterateval)
+		(if (,ending ,iterateval)
+		    ,(if (not end-supplied-p)
+			 iterateval
+			 end)
+		    (,combinator
+		     ,iterateval
+		     (,recfuncname (,iterator ,iterateval))))))
+       #',recfuncname)))
+
+(defmacro single-input (func &rest args)
+  (let* ((arg-name (gensym)) (func-input (subst arg-name :input-here args)))
+    `(lambda (,arg-name)
+       ,(cons func func-input))))
+
+;;An example of macros, taken from some online site (I think a StackExchange question)
+;; (defmacro create-funtest2 ()
+;;   (let ((input-list (gensym)))
+;;     `(labels ((fun-created ,input-list
+;;                 (reduce #'+ (list ,@input-list))))
+;;        (list #'fun-created (quote ,input-list)))))
+
+;;NOT WORKING
+;; (defmacro rec (iterator ending &optional (func nil func-supplied-p) &key (end nil end-supplied-p) (start nil start-supplied-p))
+;;   (let* ((recfuncname (gensym))
+;; 	 (iterateval (gensym))
+;; 	 (combinator (if (not func-supplied-p)
+;; 			 `(lambda (x y) (append (list x) (list y)))
+;; 			 func)))
+;;     `(labels ((,recfuncname (,iterateval)
+;; 		(if (,ending ,iterateval)
+;; 		    ,(if (not end-supplied-p)
+;; 			 iterateval
+;; 			 end)
+;; 		    (,combinator
+;; 		     ,iterateval
+;; 		     (,recfuncname (,iterator ,iterateval))))))
+;;        ,(if start-supplied-p
+;; 	    `(,recfuncname ,start)
+;; 	    recfuncname))))
+
 ;;DOESN'T WORK YET!!!!!
 ;; (defmacro dual-loop-append (first-setting second-setting condition &body body)
 ;;   `(let ((final nil))
@@ -113,10 +161,19 @@
 	(t (filter (cdr list-of-elements)
 		   test))))
 
-(declaim (ftype (function (integer &key (:min integer) (:step integer)) cons) range))
-(defun range (max &key (min 0) (step 1))
-  (loop for n from min below max by step
-	collect n))
+;;Add ability to determine whether you want to include the top (and bottom?) edges
+(declaim (ftype (function (integer &optional integer &key (:step integer)) cons) range))
+(defun range (a &optional (b 0 b-provided-p) &key (step nil))
+  (let* ((ends (if b-provided-p (list a b) (list b a)))
+	 (unit (if (or (null step) (= step 0))
+		   (if (<= (car ends) (car (cdr ends))) 1 -1)
+		   step)))
+    (print ends)
+    (if (>= unit 0)
+	(loop for n from (car ends) to (car (cdr ends)) by unit
+	      collect n)
+	(loop for n downfrom (car ends) to (car (cdr ends)) by (- unit)
+	      collect n))))
 
 (declaim (ftype (function (number) number) log10))
 (defun log10 (n)
@@ -372,7 +429,6 @@
 	     (sum (* (1+ i) (elt scores i)))))))
 
 ;;Numbers that cannot be summed into by 2 abundant numbers (perfect num = sum of its divisors, abundant num < sum of its divisors, deficient num > sum of its divisors)
-(declaim (ftype (function () number) abundant-non-sums))
 (defun abundant-non-sums ()
   (let ((abundants nil))
     (declare (type list abundants))
