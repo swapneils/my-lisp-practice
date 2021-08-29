@@ -71,19 +71,7 @@
 		     (,recfuncname (,iterator ,iterateval))))))
        #',recfuncname)))
 
-(defmacro single-input (func &rest args)
-  (let* ((arg-name (gensym)) (func-input (subst arg-name :input-here args)))
-    `(lambda (,arg-name)
-       ,(cons func func-input))))
-
-;;An example of macros, taken from some online site (I think a StackExchange question)
-;; (defmacro create-funtest2 ()
-;;   (let ((input-list (gensym)))
-;;     `(labels ((fun-created ,input-list
-;;                 (reduce #'+ (list ,@input-list))))
-;;        (list #'fun-created (quote ,input-list)))))
-
-;;NOT WORKING
+;;OLD (not working, inadequate) VERSION
 ;; (defmacro rec (iterator ending &optional (func nil func-supplied-p) &key (end nil end-supplied-p) (start nil start-supplied-p))
 ;;   (let* ((recfuncname (gensym))
 ;; 	 (iterateval (gensym))
@@ -101,6 +89,18 @@
 ;;        ,(if start-supplied-p
 ;; 	    `(,recfuncname ,start)
 ;; 	    recfuncname))))
+
+(defmacro single-input (func &rest args)
+  (let* ((arg-name (gensym)) (func-input (subst arg-name :input-here args)))
+    `(lambda (,arg-name)
+       ,(cons func func-input))))
+
+;;An example of macros, taken from some online site (I think a StackExchange question)
+;; (defmacro create-funtest2 ()
+;;   (let ((input-list (gensym)))
+;;     `(labels ((fun-created ,input-list
+;;                 (reduce #'+ (list ,@input-list))))
+;;        (list #'fun-created (quote ,input-list)))))
 
 ;;DOESN'T WORK YET!!!!!
 ;; (defmacro dual-loop-append (first-setting second-setting condition &body body)
@@ -168,7 +168,6 @@
 	 (unit (if (or (null step) (= step 0))
 		   (if (<= (car ends) (car (cdr ends))) 1 -1)
 		   step)))
-    (print ends)
     (if (>= unit 0)
 	(loop for n from (car ends) to (car (cdr ends)) by unit
 	      collect n)
