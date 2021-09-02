@@ -1,13 +1,18 @@
-;;(declaim (optimize (safety 3) (debug 2)))
+;; (declaim (optimize (speed 3) (safety 3) (debug 2)))
 
+(ql:quickload "alexandria")
 (require :alexandria)
 (use-package :alexandria)
+(ql:quickload "iterate")
 (require :iterate)
 (use-package :iterate)
+(ql:quickload "str")
 (require :str)
 (use-package :str)
+(ql:quickload "split-sequence")
 (require :split-sequence)
 (use-package :split-sequence)
+(ql:quickload "cl-csv")
 (require :cl-csv)
 (use-package :cl-csv)
 
@@ -54,22 +59,40 @@
 				      (return nil)))))
       (not stack))))
 
-;;An incomplete representation of "rec" from Paul Graham's Arc dialect of LISP, based purely on a passing mention of the function/macro/however-he-implemented-it in http://www.paulgraham.com/power.html
+;;Pretty useless right now; I can't send its outputs to another function or macro as inputs (or is it only to macros that it doesn't work...)
+(defmacro quote-values (&rest inputs)
+  `(values-list (mapcar (lambda (n) `(quote ,n)) ',inputs)))
+
+(defmacro funcquote-values (&rest inputs)
+  `(values-list (mapcar (lambda (n) `(function ,n)) ',inputs)))
+
+
+;;A likely-incomplete representation of "rec" from Paul Graham's Arc dialect of LISP, based purely on a passing mention of the function/macro/however-he-implemented-it in http://www.paulgraham.com/power.html
 ;;NOTE: I still have to look at the actual implementation to see if there are any other useful functions I'm missing
 ;;NOTE: How to make this actually return the function, instead of just applying it to the "start" input arg? If it could do that it would be really amazing, since e.g. you could use it to make input arguments for other functions. But it seems pretty hard to do with lambdas; I haven't figured out how to insert code that preserves the recursivity without just making this into a block a-la-progn or somehow making it a function; which probably just means recursing the whole thing, inelegant as that is.
 
-(defmacro rec (iterator ending combinator &optional (end nil end-supplied-p))
+;;NOTE 8/31/2021: Switched this from a macro to a function. Added an eval and required that input functions be quoted (e.g. "#'*")
+
+(defun rec (iterator ending combinator end &optional (rec-end :rec-end) (eval-end T))
   (let* ((recfuncname (gensym))
-	 (iterateval (gensym)))
-    `(labels ((,recfuncname (,iterateval)
-		(if (,ending ,iterateval)
-		    ,(if (not end-supplied-p)
-			 iterateval
-			 end)
-		    (,combinator
-		     ,iterateval
-		     (,recfuncname (,iterator ,iterateval))))))
-       #',recfuncname)))
+	 (iterateval (gensym))
+	 (last-output (if (equal end rec-end)
+			  iterateval
+			  (subst iterateval rec-end end))))
+    (eval `(labels ((,recfuncname (,iterateval)
+		      (if (funcall ,ending ,iterateval)
+			  ,(if eval-end
+			       last-output
+			       `(quote ,last-output))
+			  ,(if (not (null combinator))
+			       `(funcall ,combinator
+					 ,iterateval
+					 (,recfuncname (funcall ,iterator ,iterateval)))
+			       (when (not (null iterator))
+				 `(,recfuncname (funcall ,iterator ,iterateval)))))))
+	     #',recfuncname))))
+
+;;Make/find a macro for (possibly multi-variate) dynamic programming?
 
 ;;OLD (not working, inadequate) VERSION
 ;; (defmacro rec (iterator ending &optional (func nil func-supplied-p) &key (end nil end-supplied-p) (start nil start-supplied-p))
@@ -90,10 +113,53 @@
 ;; 	    `(,recfuncname ,start)
 ;; 	    recfuncname))))
 
-(defmacro single-input (func &rest args)
-  (let* ((arg-name (gensym)) (func-input (subst arg-name :input-here args)))
+;;NOTE: How to let the user decide what to replace with arg-name?
+(defmacro singleinput (placeholder func &rest args)
+  (let* ((arg-name (gensym))
+	 (func-input (cons func (subst arg-name placeholder args))))
     `(lambda (,arg-name)
-       ,(cons func func-input))))
+       ,func-input)))
+
+(defmacro doubleinput (placeholder1 placeholder2 func &rest args)
+  (let* ((arg-name1 (gensym))
+	 (arg-name2 (gensym))
+	 (func-input (cons func (subst arg-name1 placeholder1 (subst arg-name2 placeholder2 args)))))
+    `(lambda (,arg-name1 ,arg-name2)
+       ,func-input)))
+
+(defmacro insert-if (predicate code)
+  (when predicate
+    code))
+
+(defun set-nth (n val lst)
+  (append (subseq lst 0 n) (list val) (nthcdr (1+ n) lst)))
+
+;;Doesn't work yet
+;; (labels ((flip (lst)
+;; 	   (append
+;; 	    (subseq lst 0 (floor (/ 2.0 (length lst))))
+;; 	    (nreverse
+;; 	     (subseq lst
+;; 		     (ceiling (/ 2.0 (length lst))))))))
+;;   (loop for i from 0 to (ceiling (/ 2.0 10))
+;; 	do (print
+;; 	    (flip (set-nth
+;; 		   (make-list 10 :initial-element "")
+;; 		   i
+;; 		   "X")))))
+
+;;Two ways to do [almost] the same thing:
+(loop for i from 0 to 10
+      do (print (set-nth i "X" (set-nth (- 10 i) "X" (make-list 11 :initial-element " ")))))
+
+(labels ((cross-loop (i top)
+	   (let ((line (set-nth i "X" (set-nth (- top i) "X" (make-list (1+ top) :initial-element " ")))))
+	     (mapcar (singleinput str format t str) line)
+	     (terpri))
+	   (unless (= i top)
+	     (cross-loop (1+ i) top))))
+  (cross-loop 0 10))
+
 
 ;;An example of macros, taken from some online site (I think a StackExchange question)
 ;; (defmacro create-funtest2 ()
@@ -112,20 +178,20 @@
 ;; 		      t @,condition)
 ;; 	   ,@body)))))
 
-(declaim (ftype (function (integer) cons) prime-factorize))
-(defun list-prime-factorize (num)
+;; (declaim (ftype (function (integer) cons) prime-factorize))
+(defun prime-factorize (num)
   (if (< num 2) nil
       (let ((i 2) (factor-list ()))
 	(declare (type integer i) (type list factor-list))
 	(loop while (<= i (ceiling num i)) do
-	  (if (= (rem num i) 0)
-	      (progn (setf num (/ num i))
-		     (setf factor-list (cons i factor-list)))
-	      (setf i (+ i 1))))
-	(setf factor-list (cons num factor-list))
+	  (if (zerop (rem num i))
+	      (progn (setq num (/ num i))
+		     (setq factor-list (cons i factor-list)))
+	      (setq i (1+ i))))
+	(setq factor-list (cons num factor-list))
 	factor-list)))
 (defun hashtable-prime-factorize (num)
-  (let ((primes (list-prime-factorize num)) (realprimes (make-hash-table)))
+  (let ((primes (prime-factorize num)) (realprimes (make-hash-table)))
     (dolist (i primes realprimes)
       (setf (gethash i realprimes) (if (gethash i realprimes)
 				       (1+ (gethash i realprimes))
@@ -133,11 +199,12 @@
     realprimes))
 
 ;;NOTE: includes num itself in the output.
+(declaim (ftype (function (integer) cons) list-divisors))
 (defun list-divisors (num)
   (if (= num 1)
       '(1)
       (let ((primes (hashtable-prime-factorize num)))
-	(labels ((optimizer (dimensions)
+	(labels ((divisor-search (dimensions)
 		   (apply
 		    #'append
 		    (if dimensions
@@ -147,36 +214,209 @@
 			      (append
 			       ;; (list (car (car dimensions)))
 			       (mapcar #'(lambda (n) (* (expt (car (car dimensions)) i) n))
-				       (optimizer (cdr dimensions))))))
+				       (divisor-search (cdr dimensions))))))
 			'((1))))))
-	  (optimizer (hash-table-alist primes))))))
+	  (divisor-search (hash-table-alist primes))))))
 
-;;taken from somewhere
-(defun filter (list-of-elements test)
-  (cond ((null list-of-elements) nil)
-	((funcall test (car list-of-elements))
-	 (cons (car list-of-elements)
-	       (filter (cdr list-of-elements)
-		       test)))
-	(t (filter (cdr list-of-elements)
-		   test))))
 
-;;Add ability to determine whether you want to include the top (and bottom?) edges
-(declaim (ftype (function (integer &optional integer &key (:step integer)) cons) range))
-(defun range (a &optional (b 0 b-provided-p) &key (step nil))
+;;NOTE: Add ability to determine whether you want to include the top (and bottom?) edges
+(declaim (ftype (function (integer &optional integer &key (:step integer) (:incl boolean)) cons) range))
+(defun range (a &optional (b 0 b-provided-p) &key (step nil) (incl nil))
   (let* ((ends (if b-provided-p (list a b) (list b a)))
 	 (unit (if (or (null step) (= step 0))
-		   (if (<= (car ends) (car (cdr ends))) 1 -1)
+		   (if (<= (car ends) (cadr ends)) 1 -1)
 		   step)))
+    (when incl
+      (if (< unit 0)
+	  (setf (cadr ends) (1- (cadr ends)))
+	  (setf (cadr ends) (1+ (cadr ends)))))
     (if (>= unit 0)
-	(loop for n from (car ends) to (car (cdr ends)) by unit
+	(loop for n from (car ends) below (car (cdr ends)) by unit
 	      collect n)
-	(loop for n downfrom (car ends) to (car (cdr ends)) by (- unit)
+	(loop for n downfrom (car ends) above (car (cdr ends)) by (- unit)
 	      collect n))))
+
 
 (declaim (ftype (function (number) number) log10))
 (defun log10 (n)
   (/ (log n) (log 10)))
+
+(defun multiply (a &rest b)
+  (cond
+    ((numberp a) (apply #'* (cons a b)))
+    ((listp a) (apply #'mapcar (cons #'* (cons a b))))))
+
+
+;;; Functions in this section are from On Lisp
+(defun last1 (lst)
+  (car (last lst)))
+(defun single (lst)
+  (and (consp lst) (not (cdr lst))))
+(defun append1 (lst obj)
+  (append lst (list obj)))
+(defun conc1 (lst obj)
+  (nconc lst (list obj)))
+(defun mklist (obj)
+  (if (listp obj) obj (list obj)))
+
+(defun longer (x y)
+  (labels ((compare (x y)
+	     (and (consp x)
+		  (or (null y)
+		      (compare (cdr x) (cdr y))))))
+    (if (and (listp x) (listp y))
+	(compare x y)
+	(> (length x) (length y)))))
+;;Rename this to something more appropriate? "filter" makes me think of remove-if-not...
+(defun filter (fn lst)
+  (let ((acc nil))
+    (dolist (x lst)
+      (let ((val (funcall fn x)))
+	(if val (push val acc))))
+    (nreverse acc)))
+(defun group (source n)
+  (if (zerop n) (error "zero length"))
+  (labels ((recurse (source acc)
+	     (let ((rest (nthcdr n source)))
+	       (if (consp rest)
+		   (recurse rest (cons (subseq source 0 n) acc))
+		   (nreverse (cons source acc))))))
+    (if source (recurse source nil) nil)))
+(defun remove-if-tree (test tree)
+  (labels ((rec (tree acc)
+	     (cond ((null tree) (nreverse acc))
+		   ((consp (car tree))
+		    (rec (cdr tree)
+			 (cons (rec (car tree) nil) acc)))
+		   (t (rec (cdr tree)
+			   (if (funcall test (car tree))
+			       acc
+			       (cons (car tree) acc)))))))
+    (rec tree nil)))
+;;Mixture of find-if and some
+;;How to make a type specifier for this?
+;;Also, do I need the "or cons list"?
+;; (declaim (ftype (function (or cons list)) (t t)) find-return-if)
+(defun find-return-if (fn lst)
+  (if (null lst)
+      nil
+      (let ((val (funcall fn (car lst))))
+	(if val
+	    (values (car lst) val)
+	    (find-return-if fn (cdr lst))))))
+(defun before (x y lst &key (test #'eql))
+  (and lst
+       (let ((first (car lst)))
+	 (cond ((funcall test y first) nil)
+	       ((funcall test x first) lst)
+	       (t (before x y (cdr lst) :test test))))))
+(defun after (x y lst &key (test #'eql))
+  (let ((rest (before y x lst :test test)))
+    (and rest (member x rest :test test))))
+(defun duplicate (obj lst &key (test #'eql))
+  (member obj (cdr (member obj lst :test test))
+	  :test test))
+(defun split-if (fn lst)
+  (let ((acc nil))
+    (do ((src lst (cdr src)))
+	((or (null src) (funcall fn (car src)))
+	 (values (nreverse acc) src))
+      (push (car src) acc))))
+;;Highest score element of lst, fn used to get scores
+(defun most (fn lst)
+  (if (null lst)
+      (values nil nil)
+      (let* ((wins (car lst))
+	     (max (funcall fn wins)))
+	(dolist (obj (cdr lst))
+	  (let ((score (funcall fn obj)))
+	    (when (> score max)
+	      (setq wins obj
+		    max score))))
+	(values wins max))))
+;;Lists all eleemnts which have the highest score, rather than just one element. n is because of nreverse used on internal list of best elements; not truly destructive
+(defun mostn (fn lst)
+  (if (null lst)
+      (values nil nil)
+      (let ((result (list (car lst)))
+	    (max (funcall fn (car lst))))
+	(dolist (obj (cdr lst))
+	  (let ((score (funcall fn obj)))
+	    (cond ((> score max)
+		   (setq max score
+			 result (list obj)))
+		  ((= score max)
+		   (push obj result)))))
+	(values (nreverse result) max))))
+;;Element of lst that 'beats' the others according to fn (fn MUST HAVE A TOPOLOGICAL SORTING)
+(defun best (fn lst)
+  (if (null lst)
+      nil
+      (let ((wins (car lst)))
+	(dolist (obj (cdr lst))
+	  (if (funcall fn obj wins)
+	      (setq wins obj)))
+	wins)))
+;;mapcar on (range 0 n :incl t)
+(defun map0-n (fn n)
+  (mapa-b fn 0 n))
+;;mapcar on (range 1 n :incl t)
+(defun map1-n (fn n)
+  (mapa-b fn 1 n))
+;;mapcar on (range a b :incl t :step step)
+(defun mapa-b (fn a b &optional (step 1))
+  (do ((i a (+ i step))
+       (result nil))
+      ((> i b) (nreverse result))
+    (push (funcall fn i) result)))
+;;mapcar fn on the sequence starting from (funcall succ-fn start) and progressing by succ-fn until test-fn is non-nil (INLCUSIVE of this last element)
+(defun map-> (fn start test-fn succ-fn)
+  (do ((i start (funcall succ-fn i))
+       (result nil))
+      ((funcall test-fn i) (nreverse result))
+    (push (funcall fn i) result)))
+
+;;Already implemented in ALEXANDRIA package
+;; (defun mappend (fn &rest lsts)
+;;   (apply #'append (apply #'mapcar fn lsts)))
+
+;;Instead of mapcar on multiple lists concurrently input to fn, mapcar fn on all the lists separately and then put all the inputs in a single output list (append (mapcar fn list1) (mapcar fn list2)...)
+(defun mapcars (fn &rest lsts)
+  (let ((result nil))
+    (dolist (lst lsts)
+      (dolist (obj lst)
+	(push (funcall fn obj) result)))
+    (nreverse result)))
+;;recursive mapcar, applies when it reaches a level where at least one argument is an atom. Output arguments are in same format as tree traversal (e.g. (rmapcar #'+ '(1 (2 3 4) 5 6) '(15 (16 17 18) 19 20)) is (16 (18 20 22) 24 26))
+(defun rmapcar (fn &rest args)
+  (if (some #' atom args)
+      (apply fn args)
+      (apply #'mapcar
+	     #'(lambda (&rest args)
+		 (apply #'rmapcar fn args))
+	     args)))
+
+;;I/O utilities from On Lisp
+;;reads a list from the input arguments (just input the elements, space-separated)
+;;HOW DOES THIS WORK?
+(defun readlist (&rest args)
+  (values (read-from-string
+	   (concatenate 'string "("
+			(apply #'read-line args)
+			")"))))
+;;Creates a prompt using 'format' on the arguments (no need for the stream arg, though), and uses it to convert a line of console input into LISP with (read *query-io*)
+(defun prompt (&rest args)
+  (apply #'format *query-io* args)
+  (read *query-io*))
+;;Uses prompt (on args), and format to create an emulated shell which for every line applies fn to the LISP input gotten from prompt
+(defun break-loop (fn quit &rest args)
+  (format *query-io* "Entering break-loop.~%")
+  (print args)
+  (loop
+    (let ((in (apply #'prompt args)))
+      (if (funcall quit in)
+	  (return)
+	  (format *query-io* "~A~%" (funcall fn in))))))
 
 
 ;;From the Common Lisp Handbook. Note also that there is a Quicklisp library for complex string manipulations, i.e. regex replacement
@@ -218,9 +458,9 @@
 	       (prin1 total)))
     total))
 
-(declaim (ftype (function (integer integer integer integer)) sum-of-even-fibonacci))
+(declaim (ftype (function (integer integer integer integer) boolean) sum-of-even-fibonacci))
 (defun sum-of-even-fibonacci (a b sum top)
-  (setf b (+ a (setf a b)))
+  (setq b (+ a (setq a b)))
   (print "sum is ")
   (prin1 sum)
   (unless (> b top)
@@ -229,18 +469,21 @@
 	(setf sum (+ sum (print b))))
       (sum-of-even-fibonacci a b sum top))))
 
+;;Is the input a palindrome
+(declaim (ftype (function (t) boolean) palindrome))
 (defun palindrome (input)
   (let ((str ""))
-    (if (numberp input)
+    (declare (type string str))
+    (if (not (stringp input))
 	(setq str (write-to-string input))
-      (setq str (string input)))
+	(setq str (string input)))
     (if (eq (length str) 0)
 	T
-      ;; (let ((string_symmetry_len (ceiling (length string) 2)))
-      ;;   (string=
-      ;;    (subseq string 0 string_symmetry_len)
-      ;;    (reverse (subseq string (- (length string) string_symmetry_len)))))
-      (string= str (reverse str)))))
+	;; (let ((string_symmetry_len (ceiling (length string) 2)))
+	;;   (string=
+	;;    (subseq string 0 string_symmetry_len)
+	;;    (reverse (subseq string (- (length string) string_symmetry_len)))))
+	(string= str (reverse str)))))
 
 ;;largest palindromic product of two natural numbers with "digits" digits
 (declaim (ftype (function (integer) integer)))
@@ -249,17 +492,34 @@
       (progn
 	(print "Give a valid input")
 	-1)
-    (progn (let ((answer (loop for i downfrom (1- (expt 10 (+ 2 (* 2 (1- digits))))) to (expt 10 (* 2 (1- digits))) by 1
-			       when (palindrome i)
-			       do (let ((output (loop for j downfrom (1- (expt 10 digits)) to (expt 10 (1- digits)) by 1
-						      when (and (= (rem i j) 0) (<= (expt 10 (1- digits)) (/ i j) (1- (expt 10 digits))))
-						      do (return (cons 'T `(,i)))
-						      finally (return (cons 'nil `(,-1))))))
-				    (when (car output)
-				      (return output))))))
-	     (if (car answer)
-		 (nth 1 answer)
-	       0)))))
+      (progn
+	(let
+	    ((answer
+	       (loop for i
+		     downfrom
+			(1-
+			 (expt 10
+			       (+ 2 (* 2 (1- digits)))))
+		       to (expt 10 (* 2 (1- digits)))
+		     by 1
+		     when (palindrome i)
+		       do
+			  (let
+			      ((output
+				 (loop for
+				       j
+				       downfrom (1- (expt 10 digits))
+					 to (expt 10 (1- digits))
+				       by 1
+				       when (and (= (rem i j) 0)
+						 (<= (expt 10 (1- digits)) (/ i j) (1- (expt 10 digits))))
+					 do (return (cons 'T `(,i)))
+				       finally (return (cons 'nil `(,-1))))))
+			    (when (car output)
+			      (return output))))))
+	  (if (car answer)
+	      (cadr answer)
+	      0)))))
 
 
 ;; compare square of sum and sum of squares 
@@ -279,7 +539,7 @@
     (loop while (< count n)
 	  do (progn
 	       (setf i (1+ i))
-	       (when (= i (car (list-prime-factorize i)))
+	       (when (= i (car (prime-factorize i)))
 		 (setf count (1+ count)))))
     i))
 
@@ -288,7 +548,7 @@
 ;;   (loop while (< i 2000000)
 ;; 	do (progn
 ;; 	     (setf i (1+ i))
-;; 	     (when (equal i (car (list-prime-factorize i)))
+;; 	     (when (equal i (car (prime-factorize i)))
 ;; 	       (setf sum (+ sum i)))))
 ;;   sum)
 
@@ -318,7 +578,7 @@
 (defun triangle-number-divisor-test (target)
   (let ((total 1) (i 2)
 	(number-of-divisors (lambda (n)
-			      (let ((primes (list-prime-factorize n)) (realprimes (make-hash-table)) (number 1))
+			      (let ((primes (prime-factorize n)) (realprimes (make-hash-table)) (number 1))
 				(dolist (i primes realprimes)
 				  (setf (gethash i realprimes) (if (gethash i realprimes)
 								   (1+ (gethash i realprimes))
@@ -343,7 +603,7 @@
 	(sum 0))
     (dolist (i nums sum)
       (setq sum (+ sum i)))
-    (subseq (write-to-string sum) 0 digits)))
+    (parse-integer (subseq (write-to-string sum) 0 digits))))
 
 (defun longest-collatz-sequence (&optional (minstart 1) (maxstart 1000000))
   (let ((collatz (lambda (in) (let ((n in) (i 0))
@@ -450,22 +710,7 @@
 				(if (= i cursum) i nil))))))))
 	  0 i))))))
 
-;;
-(let ((sum 1000000) (digitsleft '(0 1 2 3 4 5 6 7 8 9)))
-  (iter (for i from 9 downto 0)
-    (collect (let ((step (factorial i)))
-	       (iter (for j upfrom 0)
-		 (thereis
-		  (if (> (* (+ 2 j) step) sum)
-		      (progn
-			(setq sum (- (print sum) (* (print (1+ j)) step)))
-			(prog1
-			    (print (elt digitsleft j))
-			  (setq digitsleft
-				(append
-				 (subseq digitsleft 0 j)
-				 (subseq digitsleft (1+ j))))))
-		      nil)))))))
+
 
 (defun without-elt (n target)
   (append (subseq target 0 n) (subseq target (1+ n))))
@@ -485,15 +730,16 @@
 ;; 	    (setq inlist (append (rest inlist) (list (first inlist))))))
 ;; 	combined)))
 
+;;Outputs permutations in lexicographic ordered
 (defun permutations (inlist)
   (if (null (cdr inlist))
       (list inlist)
       (let ((combined nil))
 	(iter
-	  (for i below (length inlist))
+	  (for i from (1- (length inlist)) downto 0)
 	  (setq combined (append
 			  (mapcar
-			   #'(lambda (elem) (cons (elt inlist i) elem))
+			   (singleinput elem cons (elt inlist i) elem)
 			   (permutations (without-elt i inlist)))
 			  combined)))
 	combined)))
@@ -503,6 +749,7 @@
 ;;     (setq seq (sort seq #'(lambda (x y) (< (elt x i) (elt y i))))))
 ;;   seq)
 
+;;Outputs the nth permutation in lexicographic order (n starting from 0)
 (defun nthpermutation (n input)
   (let ((sum n) (inlist input))
     (iter (for f from (1- (length inlist)) downto 0)
@@ -517,6 +764,21 @@
 				  ;; (print i)
 				  (setq sum (- sum (* (factorial f) i)))
 				  (setq inlist (without-elt i inlist)))))))))))
+;; ((let ((sum 1000000) (digitsleft '(0 1 2 3 4 5 6 7 8 9)))
+;;    (iter (for i from 9 downto 0)
+;;      (collect (let ((step (factorial i)))
+;; 		(iter (for j upfrom 0)
+;; 		  (thereis
+;; 		   (if (> (* (+ 2 j) step) sum)
+;; 		       (progn
+;; 			 (setq sum (- (print sum) (* (print (1+ j)) step)))
+;; 			 (prog1
+;; 			     (print (elt digitsleft j))
+;; 			   (setq digitsleft
+;; 				 (append
+;; 				  (subseq digitsleft 0 j)
+;; 				  (subseq digitsleft (1+ j))))))
+;; 		       nil))))))))
 
 (defun fibonacci-above-max (top a b idx)
   (if (> b top)
@@ -536,7 +798,7 @@
     (iter (for i from 1 to top-denominator)
       (finding i maximizing (repeating-decimal-length (/ i))))))
 
-;;find the coefficients for the quadratic function that produces the most consecutive primes, with the second coefficient bounded by 
+;;find the linear coefficient and constant term for the quadratic function that produces the most consecutive primes, with the linear coefficient bounded by (-top, top) and the constant term bounded by [-top, top]
 (defun most-consecutive-primes (top)
   (let ((inner-output (list (- top) (- top) (- top))))
     (iter (for a from (- 1 top) below top)
@@ -547,7 +809,7 @@
 		  (while (let ((prime (+ (expt n 2) (* a n) b)))
 			   (and
 			    (> prime 0)
-			    (null (remove prime (list-prime-factorize prime))))))
+			    (null (remove prime (prime-factorize prime))))))
 		  (count 1))))
 	  (when (> output (car inner-output))
 	    (setq inner-output (list output a b))))))
@@ -563,13 +825,57 @@
 		 (until (> curr (expt topwidth 2)))
 		 (sum (setq curr (+ curr i)))))))))
 
-;;How many distinct terms in the set a^b for a and b both in the interval [2,100]
+;;How many distinct terms in the set of values of a^b for a and b both in the interval [2,100]
 (defun distinct-series-exponents (low high)
   (length
    (let ((distincts nil))
+     (declare (type list distincts) (type number low high))
      (iter (for a from low to high)
        (iter (for b from low to high)
 	 (let ((product (expt a b)))
 	   (when (not (member product distincts)) (setq distincts (cons product distincts))))))
      distincts)))
 
+
+;; (defun sum-combinations (top steps)
+;;   (let ((unreachables ()))
+;;     (labels ((ways-to-reach (top steps)
+;; 	       (if (member top unreachables)
+;; 		   0
+;; 		   (if (< top 0) (prog1 0
+;; 				   (setq unreachables (cons top unreachables)))
+;; 		       (if (zerop top) 1
+;; 			   (if (null steps)
+;; 			       0
+;; 			       (let
+;; 				   ((cursum
+;; 				      (+ (ways-to-reach (- top (car steps)) steps)
+;; 					 (ways-to-reach top (cdr steps)))))
+;; 				 ;; (when (zerop cursum) (setq unreachables (cons top unreachables)))
+;; 				 cursum)))))))
+;;       (prog1
+;; 	  (ways-to-reach top steps)
+;; 	(print unreachables)
+;; 	(print (member 2 unreachables))))))
+
+;; (defun sum-combinations (top steps)
+;;   (labels ((ways-to-reach (top steps)
+;; 	     (if (< top 0) 0
+;; 		 (if (zerop top) 1
+;; 		     (if (null steps)
+;; 			 0
+;; 			 (+ (ways-to-reach (- top (car steps)) steps)
+;; 			    (ways-to-reach top (cdr steps))))))))
+;;     (ways-to-reach top steps)))
+
+(defun sum-combinations (top steps)
+  (let ((unreachable (make-hash-table)))
+    (labels ((ways-to-reach (top steps)
+	       (if (gethash top unreachable) 0
+		   (if (< top 0) (setf (gethash top unreachable) 0)
+		       (if (zerop top) 1
+			   (if (null steps)
+			       0
+			       (+ (ways-to-reach (- top (car steps)) steps)
+				  (ways-to-reach top (cdr steps)))))))))
+      (ways-to-reach top steps))))
