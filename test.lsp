@@ -160,9 +160,12 @@
 (defun primep (num)
   (cond
     ((= 2 num) t)
-    ((or (<= num 1) (and (> num 2) (evenp num))) nil)
-    (t (iter (for i from 3 to (sqrt num))
-	 (never (zerop (rem num i)))))))
+    ((or (<= num 1)
+	 (and (> num 2) (evenp num))
+	 (and (> num 3) (zerop (rem num 3)))) nil)
+    (t (iter (for i from 6 to (sqrt num) by 6)
+	 (never (or (zerop (rem num (1- i)))
+		    (zerop (rem num (1+ i)))))))))
 
 (declaim (ftype (function (list) hash-table) frequency-hashtable))
 (defun frequency-hashtable (input)
